@@ -3,31 +3,36 @@ package sink
 import (
 	"context"
 	"fmt"
+"encoding/binary"
+    "math"
 	"log"
+	"sync"
 	"net"
 )
 
 type Listener struct {
 	address *net.UDPAddr
+	audio   []byte
+	mutex   sync.Mutex
 }
 
 func NewServer(ctx context.Context, host string, port int, bufferSize int) *Server {
 	return &Server{
-		host:    host,
-		port:    port,
-		clients: make(map[string]Listener),
-		ctx:     ctx,
-		audio:   make([]byte, bufferSize),
+		host:       host,
+		port:       port,
+		clients:    make(map[string]*Listener),
+		ctx:        ctx,
+		bufferSize: bufferSize,
 	}
 }
 
 type Server struct {
 	udp_listener *net.UDPConn
-	clients      map[string]Listener
+	clients      map[string]*Listener
 	host         string
 	port         int
 	ctx          context.Context
-	audio        []byte
+	bufferSize   int
 }
 
 func (server *Server) Start() error {
@@ -45,8 +50,30 @@ func (server *Server) Start() error {
 }
 
 func (server *Server) Read(p []byte) (n int, err error) {
-	for i := range p {
-		p[i] = server.audio[i]
+	for _, listener := range server.clients {
+        listener.mutex.Lock()
+
+        if len(listener.audio) == 0 {
+            listener.mutex.Unlock()
+            continue
+        }
+
+		for i := 0; i < len(p) && i < len(listener.audio); i += 4 {
+            audioFloat32 := math.Float32frombits(binary.LittleEndian.Uint32(listener.audio[i:i+4]))
+            pFloat32 := math.Float32frombits(binary.LittleEndian.Uint32(p[i:i+4]))
+
+            pFloat32 += audioFloat32
+
+            binary.LittleEndian.PutUint32(p[i:i+4], math.Float32bits(pFloat32))
+		}
+
+        if len(listener.audio) < len(p) {
+            listener.audio = nil
+        } else {
+            listener.audio = listener.audio[len(p):]
+        }
+
+        listener.mutex.Unlock()
 	}
 
 	return len(p), nil
@@ -58,18 +85,26 @@ func (server *Server) listener() {
 		case <-server.ctx.Done():
 			return
 		default:
-			_, addr, err := server.udp_listener.ReadFromUDP(server.audio)
+			buffer := make([]byte, server.bufferSize)
+			n, addr, err := server.udp_listener.ReadFromUDP(buffer)
+
+            if n == 0 {
+                continue
+            }
 
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
 
-			if _, ok := server.clients[addr.String()]; !ok {
-				server.clients[addr.String()] = Listener{addr}
+			if listener, ok := server.clients[addr.String()]; !ok {
+                server.clients[addr.String()] = &Listener{addr, buffer[:n], sync.Mutex{}}
 				log.Printf("New client: %v", addr.String())
+			} else {
+                listener.mutex.Lock()
+                listener.audio = append(listener.audio, buffer[:n]...)
+                listener.mutex.Unlock()
 			}
-
 		}
 
 	}

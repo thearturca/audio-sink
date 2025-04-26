@@ -10,7 +10,6 @@ import (
 )
 
 const sampleRate = 48000
-const seconds = 0.1
 
 func main() {
 	client := sink.NewClient(context.Background(), "192.168.88.254", 8080)
@@ -57,13 +56,16 @@ func main() {
 		Data: onSamples,
 	}
 	device, err := malgo.InitDevice(ctx.Context, deviceConfig, deviceCallbacks)
+
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+
 	defer device.Uninit()
 
 	err = device.Start()
+
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
