@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
+	"strings"
 
 	"github.com/gen2brain/malgo"
 )
@@ -110,17 +112,32 @@ func (producer *Producer) InitAudio(deviceName string, deviceType string, sample
 func (producer *Producer) findDevice(deviceName string, deviceType string) (malgo.DeviceInfo, malgo.DeviceType, error) {
 	switch deviceType {
 	case "Playback":
-		devices, err := producer.audioContext.Devices(malgo.Loopback)
+		if runtime.GOOS == "linux" {
+			captureDevices, err := producer.audioContext.Devices(malgo.Capture)
 
-		if err != nil {
-			return malgo.DeviceInfo{}, malgo.DeviceType(0), err
-		}
+			if err != nil {
+				return malgo.DeviceInfo{}, malgo.DeviceType(0), err
+			}
 
-		for _, device := range devices {
-			if device.Name() == deviceName {
-				return device, malgo.Loopback, nil
+			for _, device := range captureDevices {
+				if strings.Replace(device.Name(), "Monitor of ", "", 1) == deviceName {
+					return device, malgo.Capture, nil
+				}
+			}
+		} else {
+			loopbackDevices, err := producer.audioContext.Devices(malgo.Loopback)
+
+			if err != nil {
+				return malgo.DeviceInfo{}, malgo.DeviceType(0), err
+			}
+
+			for _, device := range loopbackDevices {
+				if device.Name() == deviceName {
+					return device, malgo.Loopback, nil
+				}
 			}
 		}
+
 	case "Capture":
 		devices, err := producer.audioContext.Devices(malgo.Capture)
 
