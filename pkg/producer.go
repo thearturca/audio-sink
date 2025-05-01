@@ -73,7 +73,45 @@ func (producer *Producer) InitAudio(deviceName string, deviceType string, sample
 	} else if deviceType != "" {
 		switch deviceType {
 		case "Playback":
-			deviceConfig = malgo.DefaultDeviceConfig(malgo.Loopback)
+			if runtime.GOOS == "linux" {
+				deviceConfig = malgo.DefaultDeviceConfig(malgo.Capture)
+
+				playbackdevices, err := producer.audioContext.Devices(malgo.Playback)
+
+				if err != nil {
+					return err
+				}
+
+				var defaultPlaybackDevice malgo.DeviceInfo
+
+				for _, device := range playbackdevices {
+					if device.IsDefault == 1 {
+						defaultPlaybackDevice = device
+						break
+					}
+				}
+
+				devices, err := producer.audioContext.Devices(malgo.Capture)
+
+				if err != nil {
+					return err
+				}
+
+				monitorDeviceName := fmt.Sprintf("Monitor of %s", defaultPlaybackDevice.Name())
+
+				for _, device := range devices {
+					if device.Name() == monitorDeviceName {
+						deviceConfig.Capture.DeviceID = device.ID.Pointer()
+						break
+					}
+				}
+
+				if deviceConfig.Capture.DeviceID == nil {
+					return fmt.Errorf("Monitor device not found")
+				}
+			} else {
+				deviceConfig = malgo.DefaultDeviceConfig(malgo.Loopback)
+			}
 		case "Capture":
 			deviceConfig = malgo.DefaultDeviceConfig(malgo.Capture)
 			return fmt.Errorf("Unknown device type: %s", deviceType)
