@@ -1,13 +1,16 @@
-package sink
+package audio_sink
 
 import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
 	"sync"
+
+	"github.com/gen2brain/malgo"
 )
 
 type ProducerClient struct {
@@ -16,13 +19,12 @@ type ProducerClient struct {
 	mutex   sync.Mutex
 }
 
-func NewConsumer(ctx context.Context, host string, port int, bufferSize int) *Consumer {
+func NewConsumer(ctx context.Context, host string, port int) *Consumer {
 	return &Consumer{
-		host:       host,
-		port:       port,
-		clients:    make(map[string]*ProducerClient),
-		ctx:        ctx,
-		bufferSize: bufferSize,
+		host:    host,
+		port:    port,
+		clients: make(map[string]*ProducerClient),
+		ctx:     ctx,
 	}
 }
 
@@ -33,6 +35,9 @@ type Consumer struct {
 	port         int
 	ctx          context.Context
 	bufferSize   int
+
+	audioContext *malgo.AllocatedContext
+	device       *malgo.Device
 }
 
 func (consumer *Consumer) Start() error {
@@ -47,6 +52,91 @@ func (consumer *Consumer) Start() error {
 	go consumer.listener()
 
 	return nil
+}
+
+func (consumer *Consumer) InitAudio(deviceName string, sampleRate uint32, verbose bool) error {
+	consumer.bufferSize = int(sampleRate * 2)
+
+	if consumer.audioContext == nil {
+		malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
+			if verbose {
+				fmt.Println(message)
+			}
+		})
+
+		if err != nil {
+			return err
+		}
+
+		consumer.audioContext = malgoCtx
+	}
+
+	if consumer.device != nil {
+		consumer.device.Uninit()
+	}
+
+	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
+
+	if deviceName != "" {
+		deviceInfo, err := consumer.findDeviceId(deviceName)
+
+		if err != nil {
+			return err
+		}
+
+		deviceConfig.Playback.DeviceID = deviceInfo.ID.Pointer()
+	}
+
+	deviceConfig.Playback.Format = malgo.FormatF32
+	deviceConfig.Playback.Channels = 2
+	deviceConfig.SampleRate = sampleRate
+	deviceConfig.Alsa.NoMMap = 1
+
+	deviceCallbacks := malgo.DeviceCallbacks{
+		Data: consumer.onSamples,
+	}
+	device, err := malgo.InitDevice(
+		consumer.audioContext.Context,
+		deviceConfig,
+		deviceCallbacks,
+	)
+
+	if err != nil {
+		return err
+	}
+	err = device.Start()
+
+	if err != nil {
+		return err
+	}
+
+	consumer.device = device
+
+	return nil
+}
+
+func (consumer *Consumer) findDeviceId(deviceName string) (malgo.DeviceInfo, error) {
+	devices, err := consumer.audioContext.Devices(malgo.Playback)
+
+	if err != nil {
+		return malgo.DeviceInfo{}, err
+	}
+
+	for _, device := range devices {
+		if device.Name() == deviceName {
+			return device, nil
+		}
+	}
+
+	return malgo.DeviceInfo{}, fmt.Errorf("device %s not found", deviceName)
+}
+
+func (consumer *Consumer) onSamples(pOutputSample, _ []byte, _ uint32) {
+	_, err := io.ReadFull(consumer, pOutputSample)
+
+	if err != nil {
+		fmt.Println(err)
+	}
 }
 
 func (consumer *Consumer) Read(p []byte) (n int, err error) {
@@ -111,9 +201,23 @@ func (consumer *Consumer) listener() {
 }
 
 func (consumer *Consumer) Close() error {
+	consumer.device.Uninit()
+	err := consumer.audioContext.Uninit()
+
+	if err != nil {
+		return err
+	}
+	consumer.audioContext.Free()
+
 	if consumer.udp_listener == nil {
 		return nil
 	}
 
-	return consumer.udp_listener.Close()
+	err = consumer.udp_listener.Close()
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
