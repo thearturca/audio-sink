@@ -24,6 +24,7 @@ var devicesCmd = &cobra.Command{
 		devices, err := ctx.Devices(malgo.Capture)
 		cobra.CheckErr(err)
 
+		fmt.Println("List of available devices:")
 		fmt.Printf("Capture devices:\n%s\n\n", formatDevices(devices))
 
 		devices, err = ctx.Devices(malgo.Playback)
@@ -34,7 +35,6 @@ var devicesCmd = &cobra.Command{
 }
 
 func formatDevices(devices []malgo.DeviceInfo) string {
-
 	var result string
 
 	for _, device := range devices {
